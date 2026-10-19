@@ -9,6 +9,7 @@ import json
 import logging
 import os
 import time
+import re
 
 from aiogram import Bot, Dispatcher, Router, F
 from aiogram.filters import Command, CommandObject
@@ -16,6 +17,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import Message, CallbackQuery
 from aiogram.utils.keyboard import InlineKeyboardBuilder
+from aiogram.exceptions import TelegramForbiddenError, TelegramBadRequest
 
 # ---------------------------------------------------------------------------
 # Конфиг
@@ -99,7 +101,7 @@ async def cmd_admin_list(message: Message):
 async def cmd_admin_ban(message: Message, command: CommandObject):
     parts = (command.args or "").split(maxsplit=1)
     if len(parts) < 2 or not parts[0].isdigit():
-        return await message.answer("Формат: <code>/ban <id> <причина></code>", parse_mode="HTML")
+        return await message.answer("Формат: <code>/ban &lt;id&gt; &lt;причина&gt;</code>", parse_mode="HTML")
     uid, reason = int(parts[0]), parts[1]
     set_status(uid, "banned")
     await try_send(message.bot, uid, f"🚫 <b>Вы были забанены.</b>\n<b>Причина:</b> {html.escape(reason)}")
@@ -109,7 +111,7 @@ async def cmd_admin_ban(message: Message, command: CommandObject):
 async def cmd_admin_unban(message: Message, command: CommandObject):
     uid_str = (command.args or "").strip()
     if not uid_str.isdigit():
-        return await message.answer("Формат: <code>/unban <id></code>", parse_mode="HTML")
+        return await message.answer("Формат: <code>/unban &lt;id&gt;</code>", parse_mode="HTML")
     uid = int(uid_str)
     if get_status(uid) == "banned":
         set_status(uid, "rejected")
@@ -122,7 +124,7 @@ async def cmd_admin_unban(message: Message, command: CommandObject):
 async def cmd_admin_end(message: Message, command: CommandObject):
     parts = (command.args or "").split(maxsplit=1)
     if len(parts) < 2 or not parts[0].isdigit():
-        return await message.answer("Формат: <code>/end <id> <причина></code>", parse_mode="HTML")
+        return await message.answer("Формат: <code>/end &lt;id&gt; &lt;причина&gt;</code>", parse_mode="HTML")
     uid, reason = int(parts[0]), parts[1]
     set_status(uid, "rejected")
     if str(uid) in DB["chats"]:
@@ -135,7 +137,7 @@ async def cmd_admin_end(message: Message, command: CommandObject):
 async def cmd_admin_new(message: Message, command: CommandObject):
     parts = (command.args or "").split(maxsplit=1)
     if len(parts) < 2 or not parts[0].isdigit():
-        return await message.answer("Формат: <code>/new <id> <сообщение></code>", parse_mode="HTML")
+        return await message.answer("Формат: <code>/new &lt;id&gt; &lt;сообщение&gt;</code>", parse_mode="HTML")
     uid, msg = int(parts[0]), parts[1]
     if uid not in DB["curators"]:
         DB["curators"].append(uid)
@@ -155,7 +157,7 @@ async def cmd_admin_new(message: Message, command: CommandObject):
 async def cmd_admin_old(message: Message, command: CommandObject):
     parts = (command.args or "").split(maxsplit=1)
     if len(parts) < 2 or not parts[0].isdigit():
-        return await message.answer("Формат: <code>/old <id> <сообщение></code>", parse_mode="HTML")
+        return await message.answer("Формат: <code>/old &lt;id&gt; &lt;сообщение&gt;</code>", parse_mode="HTML")
     uid, msg = int(parts[0]), parts[1]
     if uid in DB["curators"]:
         DB["curators"].remove(uid)
@@ -259,9 +261,8 @@ async def staff_reply(message: Message):
         if m: uid = int(m.group(1))
         
     if not uid:
-        return await message.answer("⚠️ Не удалось определить ID. Используйте /s <id> <текст>")
+        return await message.answer("⚠️ Не удалось определить ID. Используйте <code>/s &lt;id&gt; &lt;текст&gt;</code>", parse_mode="HTML")
     
-    # Пересылаем контент (текст, фото, видео и т.д.)
     try:
         await message.copy_to(uid)
         if str(uid) not in DB["chats"]: DB["chats"][str(uid)] = {"curator_id": message.from_user.id, "history": []}
@@ -289,7 +290,6 @@ async def cmd_start(message: Message, state: FSMContext):
 
     await state.set_state(Form.waiting_form)
     
-    # КРАСИВОЕ СТАРТОВОЕ СООБЩЕНИЕ
     text = (
         f"<b>🐋 Добро пожаловать в игру «Голубой кит»!</b>\n"
         f"{LINE}\n"
@@ -368,7 +368,6 @@ async def handle_messages(message: Message):
     uid = message.from_user.id
     staff_mode = is_staff(uid)
 
-    # Определяем, есть ли текст или медиа
     has_media = bool(message.photo or message.video or message.video_note or message.voice or message.document or message.sticker or message.animation)
     text = message.text or message.caption or ""
     
@@ -378,7 +377,7 @@ async def handle_messages(message: Message):
         if not text.strip() and not has_media: return
         
         try:
-            await message.copy_to(target_uid) # Отправляем игроку
+            await message.copy_to(target_uid)
             
             if str(target_uid) in DB["chats"]:
                 log_text = text if text else "[Медиафайл]"
@@ -392,7 +391,7 @@ async def handle_messages(message: Message):
             await message.answer(f"❌ Ошибка отправки: {e}")
         return
 
-    # 2. ПЕРСОНАЛ ВНЕ ЧАТА (Игнорируем, если это не команды)
+    # 2. ПЕРСОНАЛ ВНЕ ЧАТА (Игнорируем)
     if staff_mode: return
 
     # 3. ЛОГИКА ДЛЯ ИГРОКОВ
@@ -433,12 +432,10 @@ async def handle_messages(message: Message):
     LAST_MSG_TIME[uid] = now
     
     if history and history[-1]["role"] == "user" and history[-1]["text"] != "[Медиафайл]" and (now - last_time < 30):
-        # Объединяем сообщения
         history[-1]["text"] += f"\n{text}"
         history[-1]["count"] += 1
         save_db()
         
-        # Если куратор в этом чате — редактируем его сообщение (чтобы спам не летел)
         if ACTIVE_CHATS.get(curator_id) == uid and history[-1].get("staff_msg_id"):
             try:
                 await message.bot.edit_message_text(
@@ -454,12 +451,10 @@ async def handle_messages(message: Message):
     save_db()
     
     if ACTIVE_CHATS.get(curator_id) == uid:
-        # Куратор внутри чата -> отправляем текст
         sent = await message.bot.send_message(curator_id, f"👤 {html.escape(text)}", parse_mode="HTML")
         history[-1]["staff_msg_id"] = sent.message_id
         save_db()
     else:
-        # Куратор не в чате -> уведомление
         uname = message.from_user.username or "нет"
         note = (
             f"🔔 <b>У вас новое сообщение!</b>\n{LINE}\n"
