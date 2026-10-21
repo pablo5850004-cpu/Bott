@@ -22,7 +22,7 @@ from aiogram.exceptions import TelegramForbiddenError, TelegramBadRequest
 # ---------------------------------------------------------------------------
 # Конфиг
 # ---------------------------------------------------------------------------
-BOT_TOKEN = "8583008583:AAEJAyJA1rICvWrd5Zfmi6wk2EfV-g4yN4Q"
+BOT_TOKEN = "8583008583:AAGVwvQhfJVttS2faZjf13hLkYgyUM6AcyM"
 ADMIN_ID = 8788765197
 
 DB_FILE = "users_db.json"
